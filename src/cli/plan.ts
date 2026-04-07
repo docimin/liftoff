@@ -15,7 +15,7 @@ export async function runPlanWizard(): Promise<void> {
     message: "Source server (where your stack is now)",
     placeholder: "root@old-server.de",
     validate: (value) => {
-      if (!value.trim()) return "Please enter a connection string";
+      if (!value?.trim()) return "Please enter a connection string";
     },
   });
   if (p.isCancel(sourceHost)) return handleCancel();
@@ -73,7 +73,7 @@ export async function runPlanWizard(): Promise<void> {
     message: "Target server (where you want to migrate to)",
     placeholder: "root@new-server.de",
     validate: (value) => {
-      if (!value.trim()) return "Please enter a connection string";
+      if (!value?.trim()) return "Please enter a connection string";
     },
   });
   if (p.isCancel(targetHost)) return handleCancel();
