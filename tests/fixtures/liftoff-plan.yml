@@ -1,0 +1,53 @@
+version: 1
+
+source:
+  host: root@old-server.de
+  compose_file: /opt/nextcloud/docker-compose.yml
+
+target:
+  host: root@new-server.de
+  compose_dir: /opt/nextcloud
+
+services:
+  - name: nextcloud-app
+    image: nextcloud:28
+    volumes:
+      - nextcloud_data:/var/www/html
+  - name: nextcloud-db
+    image: postgres:16
+    type: postgres
+    version: "16"
+    volumes:
+      - nextcloud_db:/var/lib/postgresql/data
+
+steps:
+  - name: Pre-sync volumes
+    type: rsync
+    live: true
+  - name: Copy compose files
+    type: compose_copy
+  - name: Dump PostgreSQL
+    type: postgres_dump
+    service: nextcloud-db
+    method: dump_restore
+  - name: Stop source stack
+    type: compose_down
+  - name: Final delta sync
+    type: rsync
+    live: false
+  - name: Start target database
+    type: compose_up
+    service: nextcloud-db
+  - name: Restore PostgreSQL
+    type: postgres_restore
+    service: nextcloud-db
+  - name: Start target stack
+    type: compose_up
+  - name: Container health check
+    type: container_check
+    service: nextcloud-app
+    expect: running
+  - name: HTTP health check
+    type: http_check
+    url: https://cloud.example.org
+    expect: 200
