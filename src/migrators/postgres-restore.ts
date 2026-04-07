@@ -30,6 +30,10 @@ export const postgresRestoreMigrator: Migrator = {
     const service = step.service!;
     const targetDir = context.plan.target.compose_dir!;
 
+    // Clean up any leftover dump files from a previous run
+    await context.source.exec(`rm -f ${SOURCE_DUMP_PATH}`);
+    await context.target.exec(`rm -f ${REMOTE_DUMP_PATH}`);
+
     context.onLog("Copying database dump to target server...");
 
     // Relay dump file through the liftoff process using SFTP
@@ -56,17 +60,39 @@ export const postgresRestoreMigrator: Migrator = {
       `cd ${targetDir} && docker compose${projectFlag} exec -T ${service} psql -U postgres < ${REMOTE_DUMP_PATH}`,
     );
 
+    // psql may return non-zero due to "already exists" errors on re-runs — that's OK
     if (restoreResult.code !== 0) {
-      // Fallback: try with POSTGRES_USER
-      const envRestore = await context.target.exec(
-        `cd ${targetDir} && docker compose${projectFlag} exec -T ${service} sh -c 'psql -U $POSTGRES_USER' < ${REMOTE_DUMP_PATH}`,
-      );
-      if (envRestore.code !== 0) {
-        return {
-          success: false,
-          error: `pg_restore failed: ${envRestore.stderr || restoreResult.stderr}`,
-          duration: Date.now() - start,
-        };
+      const hasFatalError = restoreResult.stderr
+        .split("\n")
+        .some(
+          (l) =>
+            l.includes("ERROR") &&
+            !l.includes("already exists") &&
+            !l.includes("current transaction is aborted"),
+        );
+
+      if (hasFatalError) {
+        // Fallback: try with POSTGRES_USER
+        const envRestore = await context.target.exec(
+          `cd ${targetDir} && docker compose${projectFlag} exec -T ${service} sh -c 'psql -U $POSTGRES_USER' < ${REMOTE_DUMP_PATH}`,
+        );
+        if (envRestore.code !== 0) {
+          const envHasFatal = envRestore.stderr
+            .split("\n")
+            .some(
+              (l) =>
+                l.includes("ERROR") &&
+                !l.includes("already exists") &&
+                !l.includes("current transaction is aborted"),
+            );
+          if (envHasFatal) {
+            return {
+              success: false,
+              error: `pg_restore failed: ${envRestore.stderr || restoreResult.stderr}`,
+              duration: Date.now() - start,
+            };
+          }
+        }
       }
     }
 

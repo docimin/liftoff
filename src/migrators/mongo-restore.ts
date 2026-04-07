@@ -30,6 +30,10 @@ export const mongoRestoreMigrator: Migrator = {
     const service = step.service!;
     const targetDir = context.plan.target.compose_dir!;
 
+    // Clean up any leftover dump files from a previous run
+    await context.source.exec(`rm -f ${SOURCE_DUMP_PATH}`);
+    await context.target.exec(`rm -f ${REMOTE_DUMP_PATH}`);
+
     context.onLog("Copying database dump to target server...");
 
     // Relay dump file through the liftoff process using SFTP

@@ -28,92 +28,96 @@ export const rsyncMigrator: Migrator = {
   async execute(_step: Step, context: MigrationContext): Promise<StepResult> {
     const start = Date.now();
 
-    // Use resolved volumes from the plan instead of re-deriving from service definitions
     const volumes = context.plan.volumes;
+
+    // Clean up any leftover temp files from a previous run
+    await context.source.exec("rm -f /tmp/liftoff-vol-*.tar.gz");
+    await context.target.exec("rm -f /tmp/liftoff-vol-*.tar.gz");
 
     if (volumes.length === 0) {
       context.onLog("No volumes to sync");
       return { success: true, duration: Date.now() - start };
     }
 
-    for (const vol of volumes) {
+    for (let vi = 0; vi < volumes.length; vi++) {
+      const vol = volumes[vi];
       const sourcePath = vol.mountpoint;
-      const targetHost = context.plan.target.host;
 
-      context.onLog(`Syncing volume ${vol.name}: ${sourcePath}`);
+      context.onLog(`Syncing volume ${vol.name} (${vi + 1}/${volumes.length}): ${sourcePath}`);
 
-      // Try running rsync locally (works when liftoff is on the source server).
-      // The local source.exec runs on the liftoff machine, which can rsync to the target.
-      const rsyncCmd = [
-        "rsync",
-        "-azP",
-        "--delete",
-        `${sourcePath}/`,
-        `${targetHost}:${sourcePath}/`,
-      ].join(" ");
+      // Resolve target mountpoint — may differ from source if project names differ
+      const targetMountResult = await context.target.exec(
+        `docker volume inspect ${vol.name} --format '{{.Mountpoint}}'`,
+      );
+      const targetPath =
+        targetMountResult.code === 0 && targetMountResult.stdout.trim()
+          ? targetMountResult.stdout.trim()
+          : sourcePath; // fallback to same path
 
-      const rsyncResult = await context.source.execStream(rsyncCmd, (chunk) => {
-        const percentMatch = chunk.match(/(\d+)%/);
-        if (percentMatch) {
-          context.onProgress({
-            stepIndex: 0,
-            percent: parseInt(percentMatch[1], 10),
-            message: `Syncing ${vol.name}`,
-          });
-        }
-      });
+      // Transfer via tar+SFTP relay through the liftoff process.
+      // This uses the already-authenticated SSH connections — no extra SSH keys,
+      // passphrases, or host key prompts needed.
+      const remoteTar = `/tmp/liftoff-vol-${vol.name}.tar.gz`;
+      const localTmp = join(tmpdir(), `liftoff-vol-${vol.name}.tar.gz`);
 
-      if (rsyncResult.code !== 0) {
-        // Fallback: relay through the liftoff process using download + upload (SFTP).
-        // This works even when source cannot SSH to target directly.
-        context.onLog(`Direct rsync failed for ${vol.name}, falling back to SFTP relay...`);
-
-        const localTmp = join(tmpdir(), `liftoff-vol-${vol.name}.tar.gz`);
-
-        // Archive the volume directory on source
-        const archiveResult = await context.source.exec(
-          `tar czf /tmp/liftoff-vol-${vol.name}.tar.gz -C ${sourcePath} .`,
-        );
-        if (archiveResult.code !== 0) {
-          return {
-            success: false,
-            error: `Failed to archive volume ${vol.name}: ${archiveResult.stderr}`,
-            duration: Date.now() - start,
-          };
-        }
-
-        // Download archive from source to local temp
-        await context.source.download(`/tmp/liftoff-vol-${vol.name}.tar.gz`, localTmp);
-
-        // Upload archive to target
-        await context.target.upload(localTmp, `/tmp/liftoff-vol-${vol.name}.tar.gz`);
-
-        // Extract on target
-        const extractResult = await context.target.exec(
-          `mkdir -p ${sourcePath} && tar xzf /tmp/liftoff-vol-${vol.name}.tar.gz -C ${sourcePath}`,
-        );
-        if (extractResult.code !== 0) {
-          return {
-            success: false,
-            error: `Failed to extract volume ${vol.name} on target: ${extractResult.stderr}`,
-            duration: Date.now() - start,
-          };
-        }
-
-        // Clean up temp files
-        await context.source.exec(`rm -f /tmp/liftoff-vol-${vol.name}.tar.gz`);
-        await context.target.exec(`rm -f /tmp/liftoff-vol-${vol.name}.tar.gz`);
-
-        // Clean up local temp file
-        try {
-          const { unlinkSync } = await import("node:fs");
-          unlinkSync(localTmp);
-        } catch {
-          // ignore cleanup errors
-        }
+      // Archive volume on source
+      context.onLog(`  Archiving ${vol.name}...`);
+      const archiveResult = await context.source.exec(`tar czf ${remoteTar} -C ${sourcePath} .`);
+      if (archiveResult.code !== 0) {
+        return {
+          success: false,
+          error: `Failed to archive volume ${vol.name}: ${archiveResult.stderr}`,
+          duration: Date.now() - start,
+        };
       }
 
-      context.onLog(`Volume ${vol.name} synced`);
+      // Get archive size for progress reporting
+      const sizeResult = await context.source.exec(
+        `stat -c%s ${remoteTar} 2>/dev/null || stat -f%z ${remoteTar}`,
+      );
+      const archiveSize = Number.parseInt(sizeResult.stdout.trim(), 10) || 0;
+      const sizeMb = (archiveSize / 1024 / 1024).toFixed(1);
+      context.onLog(`  Transferring ${sizeMb} MB...`);
+
+      // Download from source → upload to target
+      await context.source.download(remoteTar, localTmp);
+
+      context.onProgress({
+        stepIndex: 0,
+        percent: Math.round(((vi + 0.5) / volumes.length) * 100),
+        message: `Uploading ${vol.name} to target`,
+      });
+
+      await context.target.upload(localTmp, remoteTar);
+
+      // Extract on target
+      context.onLog(`  Extracting on target...`);
+      const extractResult = await context.target.exec(
+        `mkdir -p ${targetPath} && tar xzf ${remoteTar} -C ${targetPath}`,
+      );
+      if (extractResult.code !== 0) {
+        return {
+          success: false,
+          error: `Failed to extract volume ${vol.name} on target: ${extractResult.stderr}`,
+          duration: Date.now() - start,
+        };
+      }
+
+      // Clean up
+      await context.source.exec(`rm -f ${remoteTar}`);
+      await context.target.exec(`rm -f ${remoteTar}`);
+      try {
+        const { unlinkSync } = await import("node:fs");
+        unlinkSync(localTmp);
+      } catch {}
+
+      context.onProgress({
+        stepIndex: 0,
+        percent: Math.round(((vi + 1) / volumes.length) * 100),
+        message: `Volume ${vol.name} synced`,
+      });
+
+      context.onLog(`  Volume ${vol.name} synced`);
     }
 
     return { success: true, duration: Date.now() - start };

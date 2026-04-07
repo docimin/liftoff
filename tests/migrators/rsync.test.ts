@@ -54,7 +54,7 @@ describe("rsyncMigrator", () => {
     expect(result.errors[0]).toContain("target");
   });
 
-  test("execute runs rsync for each volume", async () => {
+  test("execute archives and transfers each volume via tar+SFTP", async () => {
     const source = new MockSshClient((cmd) => {
       if (cmd.includes("docker volume inspect")) {
         return {
@@ -63,8 +63,8 @@ describe("rsyncMigrator", () => {
           code: 0,
         };
       }
-      if (cmd.includes("rsync")) {
-        return { stdout: "", stderr: "", code: 0 };
+      if (cmd.includes("stat")) {
+        return { stdout: "1024", stderr: "", code: 0 };
       }
       return { stdout: "", stderr: "", code: 0 };
     });
@@ -75,6 +75,12 @@ describe("rsyncMigrator", () => {
       makeContext(source, target),
     );
     expect(result.success).toBe(true);
-    expect(source.commands.some((c) => c.includes("rsync"))).toBe(true);
+    // Should use tar to archive
+    expect(source.commands.some((c) => c.includes("tar czf"))).toBe(true);
+    // Should download from source and upload to target
+    expect(source.downloadedFiles.length).toBeGreaterThan(0);
+    expect(target.uploadedFiles.length).toBeGreaterThan(0);
+    // Should extract on target
+    expect(target.commands.some((c) => c.includes("tar xzf"))).toBe(true);
   });
 });

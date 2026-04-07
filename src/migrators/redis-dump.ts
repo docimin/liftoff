@@ -36,6 +36,21 @@ export const redisDumpMigrator: Migrator = {
 
     context.onLog(`Triggering Redis BGSAVE on ${service}...`);
 
+    // Check if Redis container is running before attempting BGSAVE
+    const psCheck = await context.source.exec(
+      `docker compose -f ${composePath} ps --status running --format '{{.Name}}' ${service} 2>&1`,
+    );
+    const isRunning = psCheck.stdout
+      .trim()
+      .split("\n")
+      .filter((l) => l && !l.startsWith("time=") && !l.includes("level=warning"));
+    if (isRunning.length === 0) {
+      context.onLog(
+        `Redis container ${service} is not running — skipping BGSAVE (volume data will still be synced)`,
+      );
+      return { success: true, duration: Date.now() - start };
+    }
+
     // Get LASTSAVE timestamp before triggering save
     const beforeSave = await context.source.exec(
       `docker compose -f ${composePath} exec -T ${service} redis-cli LASTSAVE`,

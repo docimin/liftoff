@@ -36,6 +36,9 @@ export const mysqlDumpMigrator: Migrator = {
     const service = step.service!;
     const composePath = context.plan.source.compose_file!;
 
+    // Clean up any leftover dump file from a previous run
+    await context.source.exec(`rm -f ${DUMP_PATH}`);
+
     context.onLog(`Dumping MySQL database from ${service}...`);
 
     // Run mysqldump inside the container — captures all databases

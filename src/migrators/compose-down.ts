@@ -22,11 +22,25 @@ export const composeDownMigrator: Migrator = {
     const start = Date.now();
     const composePath = context.plan.source.compose_file!;
 
-    context.onLog("Stopping source stack...");
-
     const projectFlag = context.plan.source.project_name
       ? ` -p ${context.plan.source.project_name}`
       : "";
+
+    // Check if stack is already stopped
+    const psResult = await context.source.exec(
+      `docker compose -f ${composePath}${projectFlag} ps --status running --format '{{.Name}}' 2>&1`,
+    );
+    const running = psResult.stdout
+      .trim()
+      .split("\n")
+      .filter((l) => l && !l.startsWith("time=") && !l.includes("level=warning"));
+    if (running.length === 0) {
+      context.onLog("Source stack already stopped");
+      return { success: true, duration: Date.now() - start };
+    }
+
+    context.onLog("Stopping source stack...");
+
     const result = await context.source.exec(`docker compose -f ${composePath}${projectFlag} down`);
 
     if (result.code !== 0) {

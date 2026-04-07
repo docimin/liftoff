@@ -26,11 +26,12 @@ function makeContext(source: MockSshClient): MigrationContext {
 
 describe("composeDownMigrator", () => {
   test("runs docker compose down on source", async () => {
-    const source = new MockSshClient(() => ({
-      stdout: "",
-      stderr: "",
-      code: 0,
-    }));
+    const source = new MockSshClient((cmd) => {
+      if (cmd.includes("ps --status running")) {
+        return { stdout: "app-1", stderr: "", code: 0 };
+      }
+      return { stdout: "", stderr: "", code: 0 };
+    });
     const result = await composeDownMigrator.execute(
       { name: "stop", type: "compose_down" },
       makeContext(source),
@@ -42,11 +43,12 @@ describe("composeDownMigrator", () => {
   });
 
   test("uses correct compose file path", async () => {
-    const source = new MockSshClient(() => ({
-      stdout: "",
-      stderr: "",
-      code: 0,
-    }));
+    const source = new MockSshClient((cmd) => {
+      if (cmd.includes("ps --status running")) {
+        return { stdout: "app-1", stderr: "", code: 0 };
+      }
+      return { stdout: "", stderr: "", code: 0 };
+    });
     await composeDownMigrator.execute({ name: "stop", type: "compose_down" }, makeContext(source));
     expect(source.commands.some((c) => c.includes("-f /opt/app/docker-compose.yml"))).toBe(true);
   });

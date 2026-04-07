@@ -36,6 +36,9 @@ export const mongoDumpMigrator: Migrator = {
     const service = step.service!;
     const composePath = context.plan.source.compose_file!;
 
+    // Clean up any leftover dump file from a previous run
+    await context.source.exec(`rm -f ${DUMP_PATH}`);
+
     context.onLog(`Dumping MongoDB from ${service}...`);
 
     // Run mongodump inside the container — pipe to stdout so docker compose exec -T

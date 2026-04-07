@@ -88,6 +88,46 @@ export async function runMigration(planPath: string): Promise<void> {
   const registry = createDefaultRegistry();
   const executor = new Executor(registry);
 
+  // Check for previous migration on target
+  if (plan.target.compose_dir) {
+    const composeDir = plan.target.compose_dir;
+    const projectFlag = plan.source.project_name ? ` -p ${plan.source.project_name}` : "";
+
+    const targetCheck = await targetConn.exec(
+      `cd ${composeDir} && docker compose${projectFlag} ps -a --format '{{.Name}}' 2>/dev/null`,
+    );
+    const targetHasContainers = targetCheck.code === 0 && targetCheck.stdout.trim().length > 0;
+
+    if (targetHasContainers) {
+      const p = await import("@clack/prompts");
+      const action = await p.select({
+        message: "A previous migration was detected on the target server.",
+        options: [
+          { value: "continue", label: "Continue where left off" },
+          {
+            value: "restart",
+            label: "Start fresh (removes target containers and volumes)",
+          },
+          { value: "cancel", label: "Cancel" },
+        ],
+      });
+
+      if (p.isCancel(action) || action === "cancel") {
+        await sourceConn.close();
+        await targetConn.close();
+        process.exit(0);
+      }
+
+      if (action === "restart") {
+        console.log("Cleaning up target...");
+        await targetConn.exec(`cd ${composeDir} && docker compose${projectFlag} down -v 2>&1`);
+        // Re-create volumes for fresh start
+        await targetConn.exec(`cd ${composeDir} && docker compose${projectFlag} create 2>&1`);
+        console.log("Target cleaned up.");
+      }
+    }
+  }
+
   // Pre-flight: check source stack is running
   if (plan.source.compose_file) {
     const composeDir = plan.source.compose_file.replace(/\/[^/]+$/, "");

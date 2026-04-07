@@ -50,6 +50,9 @@ describe("redisDumpMigrator", () => {
   test("execute runs redis-cli BGSAVE via docker compose exec", async () => {
     let lastsaveCall = 0;
     const source = new MockSshClient((cmd) => {
+      if (cmd.includes("ps --status running")) {
+        return { stdout: "cache-1", stderr: "", code: 0 };
+      }
       if (cmd.includes("redis-cli LASTSAVE")) {
         lastsaveCall++;
         // Return different timestamp on second+ call to indicate save complete
