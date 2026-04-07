@@ -29,9 +29,12 @@ export const composeUpMigrator: Migrator = {
         : "Starting full stack on target...",
     );
 
-    // Use cd so Docker auto-discovers compose.yml or docker-compose.yml
+    // Use source project name so volume names match the source server
+    const projectFlag = context.plan.source.project_name
+      ? ` -p ${context.plan.source.project_name}`
+      : "";
     const result = await context.target.exec(
-      `cd ${targetDir} && docker compose up -d${serviceArg}`,
+      `cd ${targetDir} && docker compose${projectFlag} up -d${serviceArg}`,
     );
 
     if (result.code !== 0) {
@@ -48,7 +51,7 @@ export const composeUpMigrator: Migrator = {
 
       // Check container is running
       const check = await context.target.exec(
-        `cd ${targetDir} && docker compose ps ${step.service} --format '{{.State}}'`,
+        `cd ${targetDir} && docker compose${projectFlag} ps ${step.service} --format '{{.State}}'`,
       );
       if (check.code === 0 && !check.stdout.includes("running")) {
         return {

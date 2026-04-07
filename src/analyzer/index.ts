@@ -59,7 +59,7 @@ export async function analyzeStack(ssh: SshClient, composePath: string): Promise
     }
   }
 
-  return { composePath, services, volumes, databases };
+  return { composePath, projectName, services, volumes, databases };
 }
 
 export { parseComposeFile } from "./compose-parser";

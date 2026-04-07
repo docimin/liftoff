@@ -4,6 +4,7 @@ export interface ServerConfig {
   host: string; // user@hostname
   compose_file?: string; // source only
   compose_dir?: string; // target only
+  project_name?: string; // Docker Compose project name (ensures matching volume names)
 }
 
 export interface Service {
@@ -116,6 +117,7 @@ export interface Migrator {
 
 export interface AnalysisResult {
   composePath: string;
+  projectName: string;
   services: Service[];
   volumes: VolumeInfo[];
   databases: DatabaseInfo[];

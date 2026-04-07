@@ -353,7 +353,11 @@ export async function runPlanWizard(): Promise<void> {
     }
   }
 
-  const source: ServerConfig = { host: resolvedSourceHost, compose_file: composePath! };
+  const source: ServerConfig = {
+    host: resolvedSourceHost,
+    compose_file: composePath!,
+    project_name: analysis.projectName,
+  };
   const target: ServerConfig = { host: targetHost, compose_dir: targetDir };
   const plan = generatePlan(source, target, analysis);
 

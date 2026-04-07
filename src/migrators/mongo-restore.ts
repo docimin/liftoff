@@ -52,9 +52,13 @@ export const mongoRestoreMigrator: Migrator = {
 
     context.onLog(`Restoring MongoDB to ${service}...`);
 
+    const projectFlag = context.plan.source.project_name
+      ? ` -p ${context.plan.source.project_name}`
+      : "";
+
     // Restore using mongorestore with --drop to replace existing data
     const restoreResult = await context.target.exec(
-      `cd ${targetDir} && docker compose exec -T ${service} mongorestore --archive=${REMOTE_DUMP_PATH} --gzip --drop`,
+      `cd ${targetDir} && docker compose${projectFlag} exec -T ${service} mongorestore --archive=${REMOTE_DUMP_PATH} --gzip --drop`,
     );
 
     if (restoreResult.code !== 0) {

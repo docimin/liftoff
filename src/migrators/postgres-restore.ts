@@ -52,15 +52,19 @@ export const postgresRestoreMigrator: Migrator = {
 
     context.onLog(`Restoring PostgreSQL database to ${service}...`);
 
+    const projectFlag = context.plan.source.project_name
+      ? ` -p ${context.plan.source.project_name}`
+      : "";
+
     // Restore using psql (pg_dumpall output is SQL)
     const restoreResult = await context.target.exec(
-      `cd ${targetDir} && docker compose exec -T ${service} psql -U postgres < ${REMOTE_DUMP_PATH}`,
+      `cd ${targetDir} && docker compose${projectFlag} exec -T ${service} psql -U postgres < ${REMOTE_DUMP_PATH}`,
     );
 
     if (restoreResult.code !== 0) {
       // Fallback: try with POSTGRES_USER
       const envRestore = await context.target.exec(
-        `cd ${targetDir} && docker compose exec -T ${service} sh -c 'psql -U $POSTGRES_USER' < ${REMOTE_DUMP_PATH}`,
+        `cd ${targetDir} && docker compose${projectFlag} exec -T ${service} sh -c 'psql -U $POSTGRES_USER' < ${REMOTE_DUMP_PATH}`,
       );
       if (envRestore.code !== 0) {
         return {

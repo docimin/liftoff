@@ -261,14 +261,19 @@ export async function runMigration(planPath: string): Promise<void> {
   // Pre-flight: check source stack is running
   if (plan.source.compose_file) {
     const composeDir = plan.source.compose_file.replace(/\/[^/]+$/, "");
+
+    // Check running containers (combine stdout+stderr since docker compose
+    // writes warnings to stderr even on success)
     const psResult = await sourceConn.exec(
-      `cd ${composeDir} && docker compose ps --format '{{.Name}} {{.State}}' 2>/dev/null`,
+      `cd ${composeDir} && docker compose ps --status running --format '{{.Name}}' 2>&1`,
     );
 
-    const lines = psResult.stdout.trim().split("\n").filter(Boolean);
-    const running = lines.filter((l) => l.includes("running"));
+    const runningContainers = psResult.stdout
+      .trim()
+      .split("\n")
+      .filter((l) => l && !l.startsWith("time=") && !l.includes("level=warning"));
 
-    if (lines.length === 0 || running.length === 0) {
+    if (runningContainers.length === 0) {
       const p = await import("@clack/prompts");
       const start = await p.confirm({
         message: "Source stack is not running. Start it before migrating?",
@@ -282,9 +287,15 @@ export async function runMigration(planPath: string): Promise<void> {
       }
 
       console.log("Starting source stack...");
-      const upResult = await sourceConn.exec(`cd ${composeDir} && docker compose up -d`);
+      // docker compose writes progress to stderr — only check exit code
+      const upResult = await sourceConn.exec(`cd ${composeDir} && docker compose up -d 2>&1`);
       if (upResult.code !== 0) {
-        console.error(`Failed to start source stack: ${upResult.stderr}`);
+        // Filter out warnings, show only real errors
+        const errors = upResult.stdout
+          .split("\n")
+          .filter((l) => l.includes("Error") || l.includes("error") || l.includes("failed"))
+          .join("\n");
+        console.error(`Failed to start source stack:\n${errors || upResult.stdout}`);
         await sourceConn.close();
         await targetConn.close();
         process.exit(1);
@@ -296,11 +307,14 @@ export async function runMigration(planPath: string): Promise<void> {
       for (let i = 0; i < maxWait; i++) {
         await new Promise((r) => setTimeout(r, 1000));
         const check = await sourceConn.exec(
-          `cd ${composeDir} && docker compose ps --format '{{.State}}' 2>/dev/null`,
+          `cd ${composeDir} && docker compose ps --status running --format '{{.Name}}' 2>&1`,
         );
-        const states = check.stdout.trim().split("\n").filter(Boolean);
-        if (states.length > 0 && states.every((s) => s.includes("running"))) {
-          console.log("Source stack is running.");
+        const states = check.stdout
+          .trim()
+          .split("\n")
+          .filter((l) => l && !l.startsWith("time=") && !l.includes("level=warning"));
+        if (states.length > 0) {
+          console.log(`Source stack is running (${states.length} services).`);
           break;
         }
         if (i === maxWait - 1) {
@@ -311,7 +325,7 @@ export async function runMigration(planPath: string): Promise<void> {
         }
       }
     } else {
-      console.log(`Source stack running (${running.length}/${lines.length} services).`);
+      console.log(`Source stack running (${runningContainers.length} services).`);
     }
   }
 

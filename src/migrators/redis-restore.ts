@@ -27,10 +27,14 @@ export const redisRestoreMigrator: Migrator = {
 
     context.onLog(`Verifying Redis loaded data on ${service}...`);
 
+    const projectFlag = context.plan.source.project_name
+      ? ` -p ${context.plan.source.project_name}`
+      : "";
+
     // Redis restores automatically from the RDB dump file when it starts
     // Verify it started and loaded data by checking DBSIZE
     const dbsizeResult = await context.target.exec(
-      `cd ${targetDir} && docker compose exec -T ${service} redis-cli DBSIZE`,
+      `cd ${targetDir} && docker compose${projectFlag} exec -T ${service} redis-cli DBSIZE`,
     );
 
     if (dbsizeResult.code !== 0) {

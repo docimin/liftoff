@@ -24,8 +24,11 @@ export const containerCheckMigrator: Migrator = {
 
     context.onLog(`Checking container ${service}...`);
 
+    const projectFlag = context.plan.source.project_name
+      ? ` -p ${context.plan.source.project_name}`
+      : "";
     const result = await context.target.exec(
-      `cd ${targetDir} && docker compose ps ${service} --format '{{.State}}'`,
+      `cd ${targetDir} && docker compose${projectFlag} ps ${service} --format '{{.State}}'`,
     );
 
     const state = result.stdout.trim().toLowerCase();

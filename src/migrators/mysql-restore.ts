@@ -52,9 +52,13 @@ export const mysqlRestoreMigrator: Migrator = {
 
     context.onLog(`Restoring MySQL database to ${service}...`);
 
+    const projectFlag = context.plan.source.project_name
+      ? ` -p ${context.plan.source.project_name}`
+      : "";
+
     // Restore using mysql client
     const restoreResult = await context.target.exec(
-      `cd ${targetDir} && docker compose exec -T ${service} mysql -u root -p$MYSQL_ROOT_PASSWORD < ${REMOTE_DUMP_PATH}`,
+      `cd ${targetDir} && docker compose${projectFlag} exec -T ${service} mysql -u root -p$MYSQL_ROOT_PASSWORD < ${REMOTE_DUMP_PATH}`,
     );
 
     if (restoreResult.code !== 0) {
