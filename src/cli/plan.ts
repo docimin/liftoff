@@ -1,4 +1,5 @@
 import { writeFileSync } from "node:fs";
+import { hostname } from "node:os";
 import { join } from "node:path";
 import * as p from "@clack/prompts";
 import { analyzeStack } from "../analyzer/index";
@@ -7,121 +8,188 @@ import { SshConnection } from "../ssh/connection";
 import { validateServer } from "../ssh/validation";
 import type { PermissionLevel, ServerConfig } from "../types";
 
+/** Detect current user and hostname for the local machine */
+function detectLocalServer(): { user: string; host: string; display: string } {
+  const user = process.env.USER || process.env.USERNAME || "root";
+  const host = hostname();
+  return { user, host, display: `${user}@${host}` };
+}
+
+/** Prompt the user for a server connection, with an option to use the current machine */
+async function promptServer(
+  role: "source" | "target",
+): Promise<{ conn: SshConnection; host: string; permissionLevel: PermissionLevel } | null> {
+  const local = detectLocalServer();
+  const label =
+    role === "source"
+      ? "Source server (where your stack is now)"
+      : "Target server (where you want to migrate to)";
+
+  const useLocal =
+    role === "source"
+      ? await p.confirm({ message: `Use this server as ${role}? (${local.display})` })
+      : null;
+
+  if (p.isCancel(useLocal)) {
+    handleCancel();
+    return null;
+  }
+
+  let connectionString: string;
+
+  if (useLocal === true) {
+    connectionString = "localhost";
+  } else {
+    // Step-by-step: host first, then user, then auth
+    const hostInput = await p.text({
+      message: `${label} — IP address or hostname`,
+      placeholder: "10.0.0.1 or server.example.com",
+      validate: (v) => {
+        if (!v?.trim()) return "Please enter a hostname or IP";
+      },
+    });
+    if (p.isCancel(hostInput)) {
+      handleCancel();
+      return null;
+    }
+
+    const userInput = await p.text({
+      message: "SSH user",
+      initialValue: "root",
+    });
+    if (p.isCancel(userInput)) {
+      handleCancel();
+      return null;
+    }
+
+    connectionString = `${userInput}@${hostInput}`;
+  }
+
+  const spinner = p.spinner();
+  spinner.start(`Connecting to ${role} server...`);
+
+  let conn: SshConnection;
+  let permissionLevel: PermissionLevel;
+
+  try {
+    conn = new SshConnection(connectionString);
+    await conn.connect();
+
+    const validation = await validateServer(conn);
+    permissionLevel = validation.permissionLevel;
+
+    const failures = validation.checks.filter((c) => c.status === "fail");
+    if (failures.length > 0) {
+      spinner.stop(`${role.charAt(0).toUpperCase() + role.slice(1)} server has issues`);
+      for (const check of failures) {
+        p.log.error(`${check.name}: ${check.message}`);
+        if (check.fix) p.log.info(`  Fix: ${check.fix}`);
+      }
+
+      const continueAnyway = await p.confirm({ message: "Continue anyway?" });
+      if (p.isCancel(continueAnyway) || !continueAnyway) {
+        handleCancel();
+        return null;
+      }
+    } else {
+      spinner.stop(
+        `${role.charAt(0).toUpperCase() + role.slice(1)} server connected and validated`,
+      );
+    }
+  } catch (err) {
+    spinner.stop("Connection failed");
+
+    // If SSH failed, offer to enter credentials manually
+    if (connectionString !== "localhost") {
+      p.log.error(err instanceof Error ? err.message : String(err));
+
+      const authMethod = await p.select({
+        message: "How would you like to authenticate?",
+        options: [
+          { value: "key", label: "Specify SSH key path" },
+          { value: "password", label: "Enter password" },
+          { value: "cancel", label: "Cancel" },
+        ],
+      });
+      if (p.isCancel(authMethod) || authMethod === "cancel") {
+        handleCancel();
+        return null;
+      }
+
+      let overrides: { keyPath?: string; password?: string } = {};
+
+      if (authMethod === "key") {
+        const keyPath = await p.text({
+          message: "Path to SSH private key",
+          placeholder: "~/.ssh/id_ed25519",
+        });
+        if (p.isCancel(keyPath)) {
+          handleCancel();
+          return null;
+        }
+        overrides = { keyPath: keyPath.replace(/^~/, process.env.HOME || "") };
+      } else {
+        const pass = await p.password({ message: "SSH password" });
+        if (p.isCancel(pass)) {
+          handleCancel();
+          return null;
+        }
+        overrides = { password: pass };
+      }
+
+      const retrySpinner = p.spinner();
+      retrySpinner.start("Retrying connection...");
+      try {
+        conn = new SshConnection(connectionString, overrides);
+        await conn.connect();
+        const validation = await validateServer(conn);
+        permissionLevel = validation.permissionLevel;
+        retrySpinner.stop(`${role.charAt(0).toUpperCase() + role.slice(1)} server connected`);
+      } catch (retryErr) {
+        retrySpinner.stop("Connection failed again");
+        p.log.error(retryErr instanceof Error ? retryErr.message : String(retryErr));
+        p.outro("Please check the connection and try again.");
+        return null;
+      }
+    } else {
+      p.log.error(err instanceof Error ? err.message : String(err));
+      p.outro("Please check the connection and try again.");
+      return null;
+    }
+  }
+
+  // Handle sudo password if needed
+  if (permissionLevel! === "sudo_passwd") {
+    const passwd = await p.password({
+      message: `Sudo password for ${role} server`,
+    });
+    if (p.isCancel(passwd)) {
+      handleCancel();
+      return null;
+    }
+    conn!.setPermissionLevel("sudo_passwd", passwd);
+  } else {
+    conn!.setPermissionLevel(permissionLevel!);
+  }
+
+  return { conn: conn!, host: connectionString, permissionLevel: permissionLevel! };
+}
+
 export async function runPlanWizard(): Promise<void> {
   p.intro("Liftoff — Migration Planner");
 
   // Step 1: Source server
-  const sourceHost = await p.text({
-    message: "Source server (where your stack is now)",
-    placeholder: "root@old-server.de",
-    validate: (value) => {
-      if (!value?.trim()) return "Please enter a connection string";
-    },
-  });
-  if (p.isCancel(sourceHost)) return handleCancel();
-
-  const sourceSpinner = p.spinner();
-  sourceSpinner.start("Connecting to source server...");
-
-  let sourceConn: SshConnection;
-  let sourcePermission: PermissionLevel;
-
-  try {
-    sourceConn = new SshConnection(sourceHost);
-    await sourceConn.connect();
-
-    const validation = await validateServer(sourceConn);
-    sourcePermission = validation.permissionLevel;
-
-    const failures = validation.checks.filter((c) => c.status === "fail");
-    if (failures.length > 0) {
-      sourceSpinner.stop("Source server has issues");
-      for (const check of failures) {
-        p.log.error(`${check.name}: ${check.message}`);
-        if (check.fix) p.log.info(`  Fix: ${check.fix}`);
-      }
-
-      const continueAnyway = await p.confirm({
-        message: "Continue anyway?",
-      });
-      if (p.isCancel(continueAnyway) || !continueAnyway) return handleCancel();
-    } else {
-      sourceSpinner.stop("Source server connected and validated");
-    }
-  } catch (err) {
-    sourceSpinner.stop("Connection failed");
-    p.log.error(err instanceof Error ? err.message : String(err));
-    p.outro("Please check the connection and try again.");
-    return;
-  }
-
-  // Handle sudo password if needed
-  let sudoPassword: string | undefined;
-  if (sourcePermission! === "sudo_passwd") {
-    const passwd = await p.password({
-      message: "Sudo password required for source server",
-    });
-    if (p.isCancel(passwd)) return handleCancel();
-    sudoPassword = passwd;
-    sourceConn!.setPermissionLevel("sudo_passwd", sudoPassword);
-  } else {
-    sourceConn!.setPermissionLevel(sourcePermission!);
-  }
+  const sourceResult = await promptServer("source");
+  if (!sourceResult) return;
+  const { conn: sourceConn, host: sourceHost } = sourceResult;
 
   // Step 2: Target server
-  const targetHost = await p.text({
-    message: "Target server (where you want to migrate to)",
-    placeholder: "root@new-server.de",
-    validate: (value) => {
-      if (!value?.trim()) return "Please enter a connection string";
-    },
-  });
-  if (p.isCancel(targetHost)) return handleCancel();
-
-  const targetSpinner = p.spinner();
-  targetSpinner.start("Connecting to target server...");
-
-  let targetConn: SshConnection;
-
-  try {
-    targetConn = new SshConnection(targetHost);
-    await targetConn.connect();
-
-    const validation = await validateServer(targetConn);
-
-    const failures = validation.checks.filter((c) => c.status === "fail");
-    if (failures.length > 0) {
-      targetSpinner.stop("Target server has issues");
-      for (const check of failures) {
-        p.log.error(`${check.name}: ${check.message}`);
-        if (check.fix) p.log.info(`  Fix: ${check.fix}`);
-      }
-
-      const continueAnyway = await p.confirm({
-        message: "Continue anyway?",
-      });
-      if (p.isCancel(continueAnyway) || !continueAnyway) return handleCancel();
-    } else {
-      targetSpinner.stop("Target server connected and validated");
-    }
-
-    // Handle target sudo
-    if (validation.permissionLevel === "sudo_passwd") {
-      const passwd = await p.password({
-        message: "Sudo password required for target server",
-      });
-      if (p.isCancel(passwd)) return handleCancel();
-      targetConn.setPermissionLevel("sudo_passwd", passwd);
-    } else {
-      targetConn.setPermissionLevel(validation.permissionLevel);
-    }
-  } catch (err) {
-    targetSpinner.stop("Connection failed");
-    p.log.error(err instanceof Error ? err.message : String(err));
-    p.outro("Please check the connection and try again.");
-    await sourceConn!.close();
+  const targetResult = await promptServer("target");
+  if (!targetResult) {
+    await sourceConn.close();
     return;
   }
+  const { conn: targetConn, host: targetHost } = targetResult;
 
   // Step 3: Find Docker Compose files
   const findSpinner = p.spinner();
