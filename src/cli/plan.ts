@@ -5,8 +5,9 @@ import * as p from "@clack/prompts";
 import { analyzeStack } from "../analyzer/index";
 import { generatePlan, stringifyPlan } from "../planner/index";
 import { SshConnection } from "../ssh/connection";
+import { LocalClient } from "../ssh/local";
 import { validateServer } from "../ssh/validation";
-import type { PermissionLevel, ServerConfig } from "../types";
+import type { PermissionLevel, ServerConfig, SshClient } from "../types";
 
 /** Detect current user and hostname for the local machine */
 function detectLocalServer(): { user: string; host: string; display: string } {
@@ -18,7 +19,7 @@ function detectLocalServer(): { user: string; host: string; display: string } {
 /** Prompt the user for a server connection, with an option to use the current machine */
 async function promptServer(
   role: "source" | "target",
-): Promise<{ conn: SshConnection; host: string; permissionLevel: PermissionLevel } | null> {
+): Promise<{ conn: SshClient; host: string; permissionLevel: PermissionLevel } | null> {
   const local = detectLocalServer();
   const label =
     role === "source"
@@ -35,35 +36,56 @@ async function promptServer(
     return null;
   }
 
-  let connectionString: string;
-
+  // Local mode — run commands directly, no SSH
   if (useLocal === true) {
-    connectionString = "localhost";
-  } else {
-    // Step-by-step: host first, then user, then auth
-    const hostInput = await p.text({
-      message: `${label} — IP address or hostname`,
-      placeholder: "10.0.0.1 or server.example.com",
-      validate: (v) => {
-        if (!v?.trim()) return "Please enter a hostname or IP";
-      },
-    });
-    if (p.isCancel(hostInput)) {
-      handleCancel();
-      return null;
+    const spinner = p.spinner();
+    spinner.start("Validating local server...");
+
+    const conn = new LocalClient();
+    const validation = await validateServer(conn);
+
+    const failures = validation.checks.filter((c) => c.status === "fail");
+    if (failures.length > 0) {
+      spinner.stop("Local server has issues");
+      for (const check of failures) {
+        p.log.error(`${check.name}: ${check.message}`);
+        if (check.fix) p.log.info(`  Fix: ${check.fix}`);
+      }
+      const continueAnyway = await p.confirm({ message: "Continue anyway?" });
+      if (p.isCancel(continueAnyway) || !continueAnyway) {
+        handleCancel();
+        return null;
+      }
+    } else {
+      spinner.stop("Local server validated");
     }
 
-    const userInput = await p.text({
-      message: "SSH user",
-      initialValue: "root",
-    });
-    if (p.isCancel(userInput)) {
-      handleCancel();
-      return null;
-    }
-
-    connectionString = `${userInput}@${hostInput}`;
+    return { conn, host: local.display, permissionLevel: validation.permissionLevel };
   }
+
+  // Remote mode — SSH connection
+  const hostInput = await p.text({
+    message: `${label} — IP address or hostname`,
+    placeholder: "10.0.0.1 or server.example.com",
+    validate: (v) => {
+      if (!v?.trim()) return "Please enter a hostname or IP";
+    },
+  });
+  if (p.isCancel(hostInput)) {
+    handleCancel();
+    return null;
+  }
+
+  const userInput = await p.text({
+    message: "SSH user",
+    initialValue: "root",
+  });
+  if (p.isCancel(userInput)) {
+    handleCancel();
+    return null;
+  }
+
+  const connectionString = `${userInput}@${hostInput}`;
 
   const spinner = p.spinner();
   spinner.start(`Connecting to ${role} server...`);
