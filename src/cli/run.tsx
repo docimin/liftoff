@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { Executor } from "../executor/index";
 import { createDefaultRegistry } from "../migrators/registry";
 import { parsePlanYaml } from "../planner/yaml";
-import { connectServer } from "../ssh/connect";
+import { connectServerInteractive } from "../ssh/connect";
 import type { MigrationPlan, ProgressEvent, SshClient, StepResult } from "../types";
 import { detectTerminal } from "./terminal";
 
@@ -248,8 +248,8 @@ export async function runMigration(planPath: string): Promise<void> {
   let targetConn: SshClient;
 
   try {
-    sourceConn = await connectServer(plan.source.host);
-    targetConn = await connectServer(plan.target.host);
+    sourceConn = await connectServerInteractive(plan.source.host);
+    targetConn = await connectServerInteractive(plan.target.host);
   } catch (err) {
     console.error(`Connection failed: ${err instanceof Error ? err.message : err}`);
     process.exit(1);

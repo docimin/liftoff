@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { createDefaultRegistry } from "../migrators/registry";
 import { parsePlanYaml } from "../planner/yaml";
-import { connectServer } from "../ssh/connect";
+import { connectServerInteractive } from "../ssh/connect";
 import type { SshClient, Step } from "../types";
 
 export async function runVerify(planPath: string): Promise<void> {
@@ -23,7 +23,7 @@ export async function runVerify(planPath: string): Promise<void> {
   // Connect to target server
   let targetConn: SshClient;
   try {
-    targetConn = await connectServer(plan.target.host);
+    targetConn = await connectServerInteractive(plan.target.host);
   } catch (err) {
     console.error(`Could not connect to target: ${err instanceof Error ? err.message : err}`);
     process.exit(1);
