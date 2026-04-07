@@ -4,6 +4,7 @@ import { join } from "node:path";
 import * as p from "@clack/prompts";
 import { analyzeStack } from "../analyzer/index";
 import { generatePlan, stringifyPlan } from "../planner/index";
+import { isLocalHost } from "../ssh/connect";
 import { SshConnection } from "../ssh/connection";
 import { LocalClient } from "../ssh/local";
 import { validateServer } from "../ssh/validation";
@@ -335,7 +336,24 @@ export async function runPlanWizard(): Promise<void> {
   if (p.isCancel(targetDir)) return handleCancel();
 
   // Step 6: Generate plan
-  const source: ServerConfig = { host: sourceHost, compose_file: composePath! };
+  // If source is local, resolve an IP that the target can reach
+  // (the local hostname like "liftoff-1" won't resolve on the target)
+  let resolvedSourceHost = sourceHost;
+  if (isLocalHost(sourceHost)) {
+    // Try to find the IP by asking the target what it connected from
+    // Or get the default route IP on the local machine
+    const ipResult = await sourceConn.exec(
+      "ip -4 route get 1 2>/dev/null | awk '{print $7; exit}' || hostname -I | awk '{print $1}'",
+    );
+    if (ipResult.code === 0 && ipResult.stdout.trim()) {
+      const detectedIp = ipResult.stdout.trim();
+      const user = process.env.USER || process.env.USERNAME || "root";
+      resolvedSourceHost = `${user}@${detectedIp}`;
+      p.log.info(`Source address for target: ${resolvedSourceHost}`);
+    }
+  }
+
+  const source: ServerConfig = { host: resolvedSourceHost, compose_file: composePath! };
   const target: ServerConfig = { host: targetHost, compose_dir: targetDir };
   const plan = generatePlan(source, target, analysis);
 

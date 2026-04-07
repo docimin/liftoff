@@ -1,12 +1,23 @@
+import { execSync } from "node:child_process";
 import { hostname } from "node:os";
 import type { SshClient } from "../types";
 import { SshConnection } from "./connection";
 import { LocalClient } from "./local";
 
+/** Get local IP addresses */
+function getLocalIps(): string[] {
+  try {
+    const result = execSync("hostname -I 2>/dev/null || echo ''", { encoding: "utf-8" });
+    return result.trim().split(/\s+/).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
 /** Check if a host string refers to the local machine */
 export function isLocalHost(host: string): boolean {
   const h = host.replace(/^[^@]*@/, ""); // strip user@
-  const localNames = ["localhost", "127.0.0.1", "::1", hostname()];
+  const localNames = ["localhost", "127.0.0.1", "::1", hostname(), ...getLocalIps()];
   return localNames.includes(h);
 }
 
