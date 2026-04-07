@@ -1,6 +1,6 @@
 {
   "name": "liftoff",
-  "version": "0.1.7",
+  "version": "0.1.9",
   "description": "Migrate Docker Compose stacks between servers with minimal downtime",
   "type": "module",
   "scripts": {
