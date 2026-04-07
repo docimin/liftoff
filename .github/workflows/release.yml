@@ -13,6 +13,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: oven-sh/setup-bun@v2
 
@@ -27,10 +29,40 @@ jobs:
           chmod +x scripts/build.sh
           bash scripts/build.sh
 
+      - name: Get previous tag
+        id: prev_tag
+        run: |
+          PREV=$(git tag --sort=-version:refname | head -2 | tail -1)
+          echo "tag=${PREV:-$(git rev-list --max-parents=0 HEAD)}" >> "$GITHUB_OUTPUT"
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          PREV="${{ steps.prev_tag.outputs.tag }}"
+          {
+            echo 'body<<BODY_EOF'
+            echo "## Install"
+            echo ""
+            echo '```bash'
+            echo "curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/scripts/install.sh | bash"
+            echo '```'
+            echo ""
+            echo "Or download a binary below for your platform."
+            echo ""
+            echo "## What's Changed"
+            echo ""
+            git log "${PREV}..${TAG}" --pretty=format:"- %s (%h)" --no-merges
+            echo ""
+            echo ""
+            echo "**Full Changelog:** https://github.com/${{ github.repository }}/compare/${PREV}...${TAG}"
+            echo 'BODY_EOF'
+          } >> "$GITHUB_OUTPUT"
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
             dist/liftoff-*
             dist/checksums.txt
-          generate_release_notes: true
+          body: ${{ steps.changelog.outputs.body }}
