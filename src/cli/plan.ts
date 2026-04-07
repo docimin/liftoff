@@ -118,13 +118,11 @@ async function promptServer(
         `${role.charAt(0).toUpperCase() + role.slice(1)} server connected and validated`,
       );
     }
-  } catch (err) {
-    spinner.stop("Connection failed");
+  } catch {
+    // Auto-detect failed silently — offer manual auth options
+    spinner.stop("Could not connect automatically");
 
-    // If SSH failed, offer to enter credentials manually
     if (connectionString !== "localhost") {
-      p.log.error(err instanceof Error ? err.message : String(err));
-
       const authMethod = await p.select({
         message: "How would you like to authenticate?",
         options: [
@@ -174,7 +172,6 @@ async function promptServer(
         return null;
       }
     } else {
-      p.log.error(err instanceof Error ? err.message : String(err));
       p.outro("Please check the connection and try again.");
       return null;
     }
@@ -230,6 +227,9 @@ export async function runPlanWizard(): Promise<void> {
     const manualPath = await p.text({
       message: "No compose files found. Enter the path manually:",
       placeholder: "/opt/myapp/docker-compose.yml",
+      validate: (v) => {
+        if (!v?.trim()) return "Please enter a file path";
+      },
     });
     if (p.isCancel(manualPath)) return handleCancel();
     composePath = manualPath;
@@ -267,11 +267,31 @@ export async function runPlanWizard(): Promise<void> {
     }
   }
 
+  // Verify the file exists before analyzing
+  const fileCheck = await sourceConn.exec(`test -f "${composePath}" && echo exists`);
+  if (!fileCheck.stdout.includes("exists")) {
+    p.log.error(`File not found: ${composePath}`);
+    p.outro("Please check the path and try again.");
+    await sourceConn.close();
+    await targetConn.close();
+    return;
+  }
+
   // Step 4: Analyze stack
   const analyzeSpinner = p.spinner();
   analyzeSpinner.start("Analyzing Docker Compose stack...");
 
-  const analysis = await analyzeStack(sourceConn!, composePath!);
+  let analysis: Awaited<ReturnType<typeof analyzeStack>>;
+  try {
+    analysis = await analyzeStack(sourceConn, composePath);
+  } catch (err) {
+    analyzeSpinner.stop("Analysis failed");
+    p.log.error(err instanceof Error ? err.message : String(err));
+    p.outro("Could not analyze the compose file.");
+    await sourceConn.close();
+    await targetConn.close();
+    return;
+  }
   analyzeSpinner.stop("Stack analyzed");
 
   // Display findings
