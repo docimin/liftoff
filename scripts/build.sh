@@ -32,7 +32,7 @@ for target in "${TARGETS[@]}"; do
   fi
 
   echo "Building $outname ($target)..."
-  bun build --compile --target="$target" src/index.ts --outfile "$OUTDIR/$outname"
+  bun build --compile --target="$target" --define "LIFTOFF_VERSION='\"$VERSION\"'" src/index.ts --outfile "$OUTDIR/$outname"
 done
 
 # Create checksums
