@@ -1,18 +1,31 @@
 {
   "name": "liftoff",
   "version": "0.1.0",
-  "description": "Migrate Docker Compose stacks between servers",
+  "description": "Migrate Docker Compose stacks between servers with minimal downtime",
   "type": "module",
-  "bin": {
-    "liftoff": "./src/index.ts"
-  },
   "scripts": {
     "dev": "bun run src/index.ts",
     "test": "bun test",
     "build": "bun build --compile src/index.ts --outfile liftoff",
+    "build:all": "bash scripts/build.sh",
     "lint": "biome check .",
     "lint:fix": "biome check --write ."
   },
+  "keywords": [
+    "docker",
+    "docker-compose",
+    "migration",
+    "server",
+    "self-hosted",
+    "devops",
+    "cli"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/docimin/liftoff"
+  },
+  "homepage": "https://github.com/docimin/liftoff#readme",
   "dependencies": {
     "@clack/prompts": "^1.2.0",
     "ink": "^6.8.0",

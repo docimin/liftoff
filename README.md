@@ -17,19 +17,30 @@ Liftoff analyzes your existing stack, creates an editable migration plan, and ex
 
 ## Requirements
 
-- [Bun](https://bun.sh) runtime (for development) or use the compiled binary
+- [Bun](https://bun.sh) runtime (for development)
 - SSH access to both source and target servers
 - Docker and Docker Compose on both servers
 - rsync on both servers
 
 ## Install
 
+**Linux / macOS:**
+
 ```bash
-# From source
+curl -fsSL https://raw.githubusercontent.com/docimin/liftoff/main/scripts/install.sh | bash
+```
+
+**Windows:**
+
+Download `liftoff-windows-x64.exe` from the [latest release](https://github.com/docimin/liftoff/releases) and add it to your PATH.
+
+**From source (requires [Bun](https://bun.sh)):**
+
+```bash
+git clone https://github.com/docimin/liftoff.git
+cd liftoff
 bun install
 bun build --compile src/index.ts --outfile liftoff
-
-# Then move the binary to your PATH
 mv liftoff /usr/local/bin/
 ```
 
